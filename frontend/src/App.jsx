@@ -472,7 +472,7 @@ export default function App() {
             {/* Footer */}
             <div className="max-w-7xl mx-auto mt-8 text-center">
                 <p className="text-xs text-gray-700">
-                    FireReach · Powered by <span className="text-orange-500/60">Rabbitt AI</span> × <span className="text-blue-400/60">Google Gemini 2.0 Flash</span>
+                    FireReach · Powered by <span className="text-orange-500/60">FireReach</span> × <span className="text-blue-400/60">Google Gemini 2.0 Flash</span>
                 </p>
             </div>
         </div>

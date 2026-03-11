@@ -188,3 +188,129 @@ The **Signal Harvester** tool is deterministic because it uses **Gemini Google S
 - In DEMO_MODE, realistic mock data is substituted — but this is clearly labelled in the UI and response.
 
 This architecture means FireReach's outreach is *factually anchored* — it can truthfully say "I saw your $200M funding round in Crunchbase" because the data came from Crunchbase, not from Gemini's training weights.
+
+---
+
+## Important: google-genai vs google-generativeai
+
+FireReach uses **two** Google SDKs:
+
+| SDK | Package | Used By | Purpose |
+|-----|---------|---------|---------|
+| **New SDK** | `google-genai` | `signal_harvester.py` | Google Search Grounding (real signals) |
+| **Old SDK** | `google-generativeai` | `agent.py`, `research_analyst.py`, `outreach_sender.py` | Standard generation + Function Calling |
+
+> ⚠️ The `google-generativeai` package is deprecated. The Signal Harvester uses the new `google-genai` SDK because grounding **silently fails** in the old SDK. Both are listed in `requirements.txt`.
+
+---
+
+## DEMO_MODE
+
+When `DEMO_MODE=true` in the `.env` file (or as an environment variable), **all tools return mock/demo data** instead of making real API calls. This is useful for testing the UI without burning API credits.
+
+Set `DEMO_MODE=false` for real agent generation with live Gemini grounded search.
+
+The Signal Harvester also falls back to demo data if:
+- The `google-genai` package is not installed
+- The Gemini API key is invalid or missing
+- All 8 grounded search queries fail
+
+---
+
+## Deployment Guide
+
+### Backend → Render
+
+#### Prerequisites
+- Code pushed to a GitHub repository
+- A [Render](https://render.com) account (free tier works)
+- Your `GEMINI_API_KEY` ready
+
+#### Steps
+
+**Option A — Blueprint (render.yaml)**:
+1. Go to [Render Dashboard](https://dashboard.render.com) → **New** → **Blueprint**
+2. Connect your GitHub repo containing the `render.yaml` file
+3. Render auto-detects `render.yaml` and creates the service
+4. Add secret environment variables in the dashboard:
+   - `GEMINI_API_KEY` = your Google Gemini API key
+   - `RESEND_API_KEY` = your Resend API key *(optional, for email sending)*
+   - `SMTP_USER` = your Gmail address *(optional)*
+   - `SMTP_PASS` = your Gmail app password *(optional)*
+5. Click **Apply** — deployment starts
+
+**Option B — Manual**:
+1. Go to Render → **New** → **Web Service**
+2. Connect your GitHub repo
+3. Set:
+   - **Name**: `firereach-api`
+   - **Runtime**: Python
+   - **Build Command**: `cd backend && pip install -r requirements.txt`
+   - **Start Command**: `cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT`
+4. Add environment variables (same as Option A)
+5. **Create Web Service**
+
+**Verify**: `https://firereach-api.onrender.com/api/health` → `{"status": "healthy"}`
+
+#### render.yaml Reference
+
+```yaml
+services:
+  - type: web
+    name: firereach-api
+    runtime: python
+    region: oregon
+    plan: free
+    buildCommand: cd backend && pip install -r requirements.txt
+    startCommand: cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false          # set manually in dashboard
+      - key: DEMO_MODE
+        value: "false"
+```
+
+---
+
+### Frontend → Vercel
+
+#### Prerequisites
+- Code pushed to a GitHub repository
+- A [Vercel](https://vercel.com) account (free tier works)
+- Your Render backend URL (e.g., `https://firereach-api.onrender.com`)
+
+#### Steps
+
+1. Go to [Vercel Dashboard](https://vercel.com/dashboard) → **Add New** → **Project**
+2. Import your GitHub repo
+3. Configure:
+   - **Framework Preset**: Vite
+   - **Root Directory**: `frontend` *(click Edit to change)*
+   - **Build Command**: `npm run build` *(auto-detected)*
+   - **Output Directory**: `dist` *(auto-detected)*
+4. Add environment variable:
+   - **Key**: `VITE_API_URL`
+   - **Value**: `https://firereach-api.onrender.com` *(your Render backend URL)*
+5. Click **Deploy**
+
+**Verify**: Open your Vercel URL → the FireReach dashboard should load and connect to the backend.
+
+#### How VITE_API_URL Works
+
+In the frontend code (`App.jsx`):
+```js
+const API_URL = import.meta.env.VITE_API_URL || ''
+```
+
+- **Local dev**: `VITE_API_URL` is empty → requests go to `/api/*` → Vite proxy forwards to `localhost:8000`
+- **Production (Vercel)**: `VITE_API_URL` = Render URL → requests go directly to `https://firereach-api.onrender.com/api/*`
+
+---
+
+### Post-Deployment Verification
+
+1. **Backend health**: `GET https://firereach-api.onrender.com/api/health`
+2. **Frontend loads**: Open your Vercel URL
+3. **Full pipeline test**: Submit outreach request from the UI → verify all 3 tools run with `mode: "grounded_search"` (not `demo`)
+4. **CORS**: The backend allows all origins (`*`) so cross-origin requests from Vercel to Render work out of the box
