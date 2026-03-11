@@ -1,0 +1,104 @@
+# ─────────────────────────────────────────────
+# FireReach — Autonomous Outreach Engine
+# .gitignore
+# ─────────────────────────────────────────────
+
+# ── Environment & Secrets ────────────────────
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# ── Python ───────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+*.so
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+.Python
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+wheels/
+pip-wheel-metadata/
+.eggs/
+
+# pytest / coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.cover
+*.log
+
+# mypy / type checkers
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pytype/
+
+# ── Node / Frontend ──────────────────────────
+node_modules/
+frontend/node_modules/
+
+# Build outputs
+dist/
+frontend/dist/
+frontend/build/
+.next/
+out/
+
+# Vite cache
+.vite/
+frontend/.vite/
+
+# Package manager locks (keep one, ignore others)
+# package-lock.json   ← keeping this
+yarn.lock
+pnpm-lock.yaml
+
+# ── IDEs & Editors ───────────────────────────
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.swp
+.DS_Store
+Thumbs.db
+
+# ── OS ───────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ── Logs ─────────────────────────────────────
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ── Misc ─────────────────────────────────────
+.cache/
+.temp/
+tmp/
+temp/

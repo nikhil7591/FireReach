@@ -1,0 +1,114 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+  
+  html {
+    scroll-behavior: smooth;
+  }
+  
+  body {
+    @apply bg-gray-950 text-gray-100 font-sans antialiased;
+    background: radial-gradient(ellipse at top left, #1a0a00 0%, #030712 40%, #030712 100%);
+    min-height: 100vh;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #0f172a;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #334155;
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #f97316;
+  }
+}
+
+@layer components {
+  /* Glass card effect */
+  .glass-card {
+    background: rgba(15, 23, 42, 0.8);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  /* Orange gradient button */
+  .btn-fire {
+    @apply relative overflow-hidden font-semibold rounded-xl px-6 py-3 text-white transition-all duration-300;
+    background: linear-gradient(135deg, #f97316 0%, #ea580c 100%);
+    box-shadow: 0 0 20px rgba(249, 115, 22, 0.3);
+  }
+  .btn-fire:hover:not(:disabled) {
+    box-shadow: 0 0 35px rgba(249, 115, 22, 0.5);
+    transform: translateY(-1px);
+  }
+  .btn-fire:active:not(:disabled) {
+    transform: translateY(0);
+  }
+  .btn-fire:disabled {
+    @apply opacity-70 cursor-not-allowed;
+  }
+
+  /* Form inputs */
+  .input-dark {
+    @apply w-full rounded-xl px-4 py-3 text-gray-100 text-sm placeholder-gray-500 outline-none transition-all duration-200;
+    background: rgba(30, 41, 59, 0.8);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .input-dark:focus {
+    border-color: rgba(249, 115, 22, 0.5);
+    box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.08);
+  }
+
+  /* Status badge */
+  .badge-online {
+    @apply inline-flex items-center gap-1.5 text-xs font-medium px-2 py-0.5 rounded-full;
+    background: rgba(34, 197, 94, 0.15);
+    color: #4ade80;
+    border: 1px solid rgba(34, 197, 94, 0.2);
+  }
+
+  /* Glowing orange text */
+  .text-fire {
+    background: linear-gradient(135deg, #fb923c 0%, #f97316 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+}
+
+/* Spinner animation */
+@keyframes spin-glow {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.spinner-fire {
+  width: 24px;
+  height: 24px;
+  border: 3px solid rgba(249, 115, 22, 0.2);
+  border-top-color: #f97316;
+  border-radius: 50%;
+  animation: spin-glow 0.8s linear infinite;
+}
+
+/* Pipeline connector animation */
+@keyframes flow {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+
+.pipeline-flow {
+  background: linear-gradient(90deg, transparent, rgba(249, 115, 22, 0.4), transparent);
+  background-size: 200% 100%;
+  animation: flow 1.5s linear infinite;
+}
