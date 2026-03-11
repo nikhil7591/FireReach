@@ -3,8 +3,8 @@ import logging
 import re
 from typing import Any
 
-import google.generativeai as genai
-from config import get_gemini_api_key
+from groq import Groq
+from config import get_groq_api_key, get_groq_model
 
 logger = logging.getLogger(__name__)
 
@@ -76,11 +76,9 @@ def analyze_signals(
 
 
     try:
-        api_key = get_gemini_api_key()
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name="gemini-2.5-flash")
+        client = Groq(api_key=get_groq_api_key())
     except Exception as exc:
-        logger.error("Failed to configure Gemini for analysis: %s", exc)
+        logger.error("Failed to configure Groq for analysis: %s", exc)
         return _fallback_brief(company_name, icp)
 
 
@@ -92,10 +90,15 @@ def analyze_signals(
 
 
     try:
-        response = model.generate_content(prompt)
-        raw_text = response.text or ""
+        response = client.chat.completions.create(
+            model=get_groq_model(),
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=1000,
+        )
+        raw_text = response.choices[0].message.content or ""
     except Exception as exc:
-        logger.error("Gemini generation failed: %s", exc)
+        logger.error("Groq generation failed: %s", exc)
         return _fallback_brief(company_name, icp)
 
 

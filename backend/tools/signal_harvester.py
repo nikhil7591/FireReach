@@ -1,17 +1,11 @@
 import re
-import time
 import datetime
 import logging
 from typing import Any
 
-try:
-    from google import genai
-    from google.genai import types as genai_types
-    NEW_SDK_AVAILABLE = True
-except ImportError:
-    NEW_SDK_AVAILABLE = False
+from groq import Groq
 
-from config import get_gemini_api_key, is_demo_mode
+from config import get_groq_api_key, get_groq_model, is_demo_mode
 
 logger = logging.getLogger(__name__)
 
@@ -32,11 +26,11 @@ SEARCH_QUERIES = {
     "competitor_churn": "{company} switched replaced migrated from competitor vendor tool 2025",
 }
 
-GROUNDING_PROMPT = (
-    "Search Google and find the latest information about {query}. "
-    "Return only factual findings with specific details like amounts, dates, names. "
-    "Do NOT make up any information — only report what you find in search results. "
-    "Present 2-3 key findings as concise bullet points."
+SIGNAL_PROMPT = (
+    "You are a sales intelligence researcher. Provide the latest known information about: {query}\n\n"
+    "Return 2-3 specific, factual findings as concise bullet points. "
+    "Include specific details like amounts, dates, names when possible.\n"
+    "Format each finding on its own line starting with •"
 )
 
 
@@ -59,111 +53,62 @@ def _build_mock_signals(company: str) -> dict:
     }
 
 
-def _grounded_search_new_sdk(client: "genai.Client", query: str, category: str) -> tuple[str, list[dict]]:
-    prompt = GROUNDING_PROMPT.format(query=query)
-    max_retries = 2
-    response = None
-    for attempt in range(max_retries + 1):
-        try:
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config=genai_types.GenerateContentConfig(
-                    tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
-                ),
-            )
-            break  # success
-        except Exception as exc:
-            exc_str = str(exc)
-            if "429" in exc_str or "RESOURCE_EXHAUSTED" in exc_str:
-                if attempt < max_retries:
-                    wait = 30 * (attempt + 1)
-                    logger.warning("[%s] Rate limited. Waiting %ds...", category, wait)
-                    time.sleep(wait)
-                    continue
-            logger.error("[%s] API call failed: %s", category, exc)
-            return "", []
-
-    if response is None:
-        return "", []
-
-    text = ""
-    sources: list[dict] = []
-
+def _query_groq(client: Groq, query: str, category: str) -> str:
+    """Query Groq for signal information about a company."""
+    prompt = SIGNAL_PROMPT.format(query=query)
     try:
-        text = response.text or ""
+        response = client.chat.completions.create(
+            model=get_groq_model(),
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=500,
+        )
+        return response.choices[0].message.content or ""
     except Exception as exc:
-        logger.error("[%s] Text extraction failed: %s", category, exc)
-
-    try:
-        candidate = response.candidates[0]
-        gm = candidate.grounding_metadata
-        if gm and gm.grounding_chunks:
-            for chunk in gm.grounding_chunks:
-                try:
-                    uri   = chunk.web.uri   or ""
-                    title = chunk.web.title or ""
-                    if uri:
-                        sources.append({"source_url": uri, "source_title": title})
-                except Exception:
-                    pass
-        else:
-            logger.warning("[%s] No grounding_chunks in response", category)
-    except Exception as exc:
-        logger.warning("[%s] Grounding metadata error: %s", category, exc)
-
-    return text, sources
+        logger.error("[%s] Groq API call failed: %s", category, exc)
+        return ""
 
 
-def _parse_findings(text: str, sources: list[dict]) -> list[dict]:
+def _parse_findings(text: str) -> list[dict]:
     if not text.strip():
         return []
 
     findings: list[dict] = []
     lines = re.split(r"\n+", text.strip())
-    for i, line in enumerate(lines):
+    for line in lines:
         line = re.sub(r"^[\*\-•\d+\.\s]+", "", line).strip()
         if len(line) < 15:
             continue
-        source = sources[i] if i < len(sources) else (sources[0] if sources else {})
         findings.append({
             "finding":      line,
-            "source_url":   source.get("source_url",   ""),
-            "source_title": source.get("source_title", ""),
+            "source_url":   "",
+            "source_title": "Groq AI Analysis",
         })
 
     if not findings and text.strip():
-        source = sources[0] if sources else {}
         findings.append({
             "finding":      text.strip()[:500],
-            "source_url":   source.get("source_url",   ""),
-            "source_title": source.get("source_title", ""),
+            "source_url":   "",
+            "source_title": "Groq AI Analysis",
         })
     return findings
 
 
-def harvest_signals(company_name: str) -> dict[str, Any]:
+def harvest_signals(company_name: str, on_category_progress=None) -> dict[str, Any]:
 
     if is_demo_mode():
         return _build_mock_signals(company_name)
 
-    if not NEW_SDK_AVAILABLE:
-        mock = _build_mock_signals(company_name)
-        mock["mode"] = "demo_fallback_no_sdk"
-        return mock
-
     try:
-        api_key = get_gemini_api_key()
-        client = genai.Client(api_key=api_key)
+        client = Groq(api_key=get_groq_api_key())
     except Exception as exc:
-        logger.error("Failed to configure Gemini client: %s", exc)
+        logger.error("Failed to configure Groq client: %s", exc)
         mock = _build_mock_signals(company_name)
         mock["mode"] = "demo_fallback_config_error"
         return mock
 
     signals: dict[str, list] = {cat: [] for cat in SEARCH_QUERIES}
-    total_sources = 0
-    any_success   = False
+    any_success = False
 
     query_list = list(SEARCH_QUERIES.items())
     for idx, (category, query_template) in enumerate(query_list):
@@ -171,33 +116,28 @@ def harvest_signals(company_name: str) -> dict[str, Any]:
             on_category_progress(category, idx + 1, len(query_list))
         query = query_template.format(company=company_name)
         try:
-            text, sources = _grounded_search_new_sdk(client, query, category)
-            findings = _parse_findings(text, sources)
+            text = _query_groq(client, query, category)
+            findings = _parse_findings(text)
             signals[category] = findings
-            total_sources += len(sources)
             if findings:
                 any_success = True
-                logger.info("[%s] %d findings, %d sources", category, len(findings), len(sources))
+                logger.info("[%s] %d findings", category, len(findings))
             else:
                 logger.warning("[%s] 0 findings returned", category)
         except Exception as exc:
             logger.error("[%s] Exception: %s", category, exc)
             signals[category] = []
 
-        if idx < len(query_list) - 1:
-            time.sleep(2)
-
     if not any_success:
-        logger.warning("All grounded searches failed — falling back to demo data")
+        logger.warning("All Groq queries failed — falling back to demo data")
         mock = _build_mock_signals(company_name)
         mock["mode"] = "demo_fallback"
-        mock["error"] = "All grounded search queries failed. This usually means your Gemini API key has exceeded its free tier quota. Check https://ai.google.dev/gemini-api/docs/rate-limits"
         return mock
 
     return {
         "company":       company_name,
         "timestamp":     datetime.datetime.utcnow().isoformat() + "Z",
         "signals":       signals,
-        "sources_count": total_sources,
-        "mode":          "grounded_search",
+        "sources_count": sum(len(v) for v in signals.values()),
+        "mode":          "groq_ai",
     }

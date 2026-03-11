@@ -354,6 +354,67 @@ export default function App() {
         }
     }
 
+    async function runStreaming(payload) {
+        const res = await fetch(`${API_URL}/api/outreach/stream`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        })
+
+        if (res.status === 404) return false // endpoint not available, use fallback
+
+        if (!res.ok) {
+            const text = await res.text()
+            let detail
+            try { detail = JSON.parse(text).detail || text } catch { detail = text || `HTTP ${res.status}` }
+            throw new Error(detail)
+        }
+
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+
+        while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            buffer += decoder.decode(value, { stream: true })
+            const lines = buffer.split('\n')
+            buffer = lines.pop() || ''
+            for (const line of lines) {
+                if (!line.startsWith('data: ')) continue
+                try {
+                    const event = JSON.parse(line.slice(6))
+                    console.log('[FireReach] SSE event:', event.type, event)
+                    handleSSEEvent(event)
+                } catch (parseErr) {
+                    console.warn('[FireReach] SSE parse error:', parseErr)
+                }
+            }
+        }
+        if (buffer.startsWith('data: ')) {
+            try { handleSSEEvent(JSON.parse(buffer.slice(6))) } catch { /* ignore */ }
+        }
+        return true
+    }
+
+    async function runFallback(payload) {
+        console.log('[FireReach] Using non-streaming fallback…')
+        setProgress(p => ({ ...p, message: 'Agent running (non-streaming)…' }))
+        const res = await fetch(`${API_URL}/api/outreach`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        })
+        if (!res.ok) {
+            const text = await res.text()
+            let detail
+            try { detail = JSON.parse(text).detail || text } catch { detail = text || `HTTP ${res.status}` }
+            throw new Error(detail)
+        }
+        const data = await res.json()
+        setResult(data)
+    }
+
     async function handleSubmit(e) {
         e.preventDefault()
         setLoading(true)
@@ -363,56 +424,11 @@ export default function App() {
         setLiveSteps([])
 
         const payload = { icp, company, recipient_email: email }
-        console.log('[FireReach] 🚀 Sending streaming request:', payload)
+        console.log('[FireReach] 🚀 Sending request:', payload)
 
         try {
-            const res = await fetch(`${API_URL}/api/outreach/stream`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-            })
-
-            if (!res.ok) {
-                const text = await res.text()
-                let detail
-                try {
-                    const body = JSON.parse(text)
-                    detail = body.detail || JSON.stringify(body)
-                } catch {
-                    detail = text || `HTTP ${res.status} ${res.statusText}`
-                }
-                throw new Error(detail)
-            }
-
-            const reader = res.body.getReader()
-            const decoder = new TextDecoder()
-            let buffer = ''
-
-            while (true) {
-                const { done, value } = await reader.read()
-                if (done) break
-
-                buffer += decoder.decode(value, { stream: true })
-                const lines = buffer.split('\n')
-                buffer = lines.pop() || ''
-
-                for (const line of lines) {
-                    if (!line.startsWith('data: ')) continue
-                    try {
-                        const event = JSON.parse(line.slice(6))
-                        console.log('[FireReach] SSE event:', event.type, event)
-                        handleSSEEvent(event)
-                    } catch (parseErr) {
-                        console.warn('[FireReach] SSE parse error:', parseErr)
-                    }
-                }
-            }
-
-            if (buffer.startsWith('data: ')) {
-                try {
-                    handleSSEEvent(JSON.parse(buffer.slice(6)))
-                } catch { /* ignore */ }
-            }
+            const streamed = await runStreaming(payload)
+            if (!streamed) await runFallback(payload)
         } catch (err) {
             const msg = err.message || 'Unknown error'
             const isNetworkError = err.name === 'TypeError' && msg.includes('fetch')

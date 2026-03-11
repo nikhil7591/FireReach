@@ -6,9 +6,10 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Any
 
-import google.generativeai as genai
+from groq import Groq
 from config import (
-    get_gemini_api_key,
+    get_groq_api_key,
+    get_groq_model,
     get_resend_api_key,
     get_sender_email,
     get_smtp_user,
@@ -77,11 +78,9 @@ def _generate_email(
     signals: dict,
 ) -> dict:
     try:
-        api_key = get_gemini_api_key()
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name="gemini-2.5-flash")
+        client = Groq(api_key=get_groq_api_key())
     except Exception as exc:
-        logger.error("Gemini config failed for email generation: %s", exc)
+        logger.error("Groq config failed for email generation: %s", exc)
         return _fallback_email(company_name, recipient_email)
 
     signals_bullets = _signals_to_bullets(signals or {})
@@ -96,10 +95,15 @@ def _generate_email(
     )
 
     try:
-        response = model.generate_content(prompt)
-        raw = response.text or ""
+        response = client.chat.completions.create(
+            model=get_groq_model(),
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=800,
+        )
+        raw = response.choices[0].message.content or ""
     except Exception as exc:
-        logger.error("Gemini email generation failed: %s", exc)
+        logger.error("Groq email generation failed: %s", exc)
         return _fallback_email(company_name, recipient_email)
 
     try:
