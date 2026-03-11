@@ -1,50 +1,26 @@
-"""
-tools/signal_harvester.py — Tool 1: Deterministic Buyer Signal Fetcher.
-
-Uses google-genai (NEW SDK) with Google Search Grounding to fetch REAL signals.
-The old google-generativeai SDK is DEPRECATED and grounding silently fails in it.
-
-Signal categories (8):
-  funding · hiring · leadership · news · tech_stack ·
-  g2_reviews · social_mentions · competitor_churn
-"""
-
 import re
+import time
 import datetime
 import logging
-import traceback
 from typing import Any
 
-# ── NEW SDK — google-genai ────────────────────────────────────────────────────
-# Install: pip install google-genai
 try:
     from google import genai
     from google.genai import types as genai_types
     NEW_SDK_AVAILABLE = True
 except ImportError:
     NEW_SDK_AVAILABLE = False
-    print("=" * 70)
-    print("ERROR: 'google-genai' package NOT installed!")
-    print("Run:  pip install google-genai")
-    print("The old 'google-generativeai' package is DEPRECATED and grounding")
-    print("silently fails in it. You MUST use 'google-genai' instead.")
-    print("=" * 70)
 
 from config import get_gemini_api_key, is_demo_mode
 
 logger = logging.getLogger(__name__)
 
-# Force INFO level so grounding logs always show in console
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     force=True,
 )
 
-
-# ─────────────────────────────────────────────
-# SEARCH QUERY TEMPLATES (8 categories)
-# ─────────────────────────────────────────────
 SEARCH_QUERIES = {
     "funding":          "{company} funding round investment 2024 2025",
     "hiring":           "{company} hiring jobs careers open positions",
@@ -56,7 +32,6 @@ SEARCH_QUERIES = {
     "competitor_churn": "{company} switched replaced migrated from competitor vendor tool 2025",
 }
 
-# Grounding prompt template
 GROUNDING_PROMPT = (
     "Search Google and find the latest information about {query}. "
     "Return only factual findings with specific details like amounts, dates, names. "
@@ -65,11 +40,7 @@ GROUNDING_PROMPT = (
 )
 
 
-# ─────────────────────────────────────────────
-# MOCK / DEMO DATA
-# ─────────────────────────────────────────────
 def _build_mock_signals(company: str) -> dict:
-    """Return realistic demo signals when DEMO_MODE=true or real fetch fails."""
     return {
         "company": company,
         "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
@@ -88,45 +59,42 @@ def _build_mock_signals(company: str) -> dict:
     }
 
 
-# ─────────────────────────────────────────────
-# GROUNDED SEARCH — NEW SDK (google-genai)
-# ─────────────────────────────────────────────
 def _grounded_search_new_sdk(client: "genai.Client", query: str, category: str) -> tuple[str, list[dict]]:
-    """
-    Use the NEW google-genai SDK to do a grounded Google Search.
-    Returns (response_text, list_of_sources).
-    """
     prompt = GROUNDING_PROMPT.format(query=query)
+    max_retries = 2
+    response = None
+    for attempt in range(max_retries + 1):
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config=genai_types.GenerateContentConfig(
+                    tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
+                ),
+            )
+            break  # success
+        except Exception as exc:
+            exc_str = str(exc)
+            if "429" in exc_str or "RESOURCE_EXHAUSTED" in exc_str:
+                if attempt < max_retries:
+                    wait = 30 * (attempt + 1)
+                    logger.warning("[%s] Rate limited. Waiting %ds...", category, wait)
+                    time.sleep(wait)
+                    continue
+            logger.error("[%s] API call failed: %s", category, exc)
+            return "", []
 
-    print(f"\n[SIGNAL HARVESTER] Searching [{category}]: {query}")
-    logger.info("[%s] Sending grounded search query to Gemini...", category)
-
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt,
-            config=genai_types.GenerateContentConfig(
-                tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
-            ),
-        )
-    except Exception as exc:
-        print(f"[SIGNAL HARVESTER] ERROR [{category}] API call failed: {exc}")
-        print(traceback.format_exc())
-        logger.error("[%s] API call failed: %s", category, exc)
+    if response is None:
         return "", []
 
     text = ""
     sources: list[dict] = []
 
-    # Extract text
     try:
         text = response.text or ""
-        print(f"[SIGNAL HARVESTER] [{category}] Got {len(text)} chars text response")
     except Exception as exc:
-        print(f"[SIGNAL HARVESTER] [{category}] Text extraction failed: {exc}")
         logger.error("[%s] Text extraction failed: %s", category, exc)
 
-    # Extract grounding metadata sources
     try:
         candidate = response.candidates[0]
         gm = candidate.grounding_metadata
@@ -139,22 +107,15 @@ def _grounded_search_new_sdk(client: "genai.Client", query: str, category: str) 
                         sources.append({"source_url": uri, "source_title": title})
                 except Exception:
                     pass
-            print(f"[SIGNAL HARVESTER] [{category}] Found {len(sources)} grounding sources")
         else:
-            print(f"[SIGNAL HARVESTER] [{category}] WARNING: No grounding_chunks in response (grounding may not be active)")
-            logger.warning("[%s] No grounding_chunks — grounding may require a paid/eligible API key", category)
+            logger.warning("[%s] No grounding_chunks in response", category)
     except Exception as exc:
-        print(f"[SIGNAL HARVESTER] [{category}] Grounding metadata extraction failed: {exc}")
         logger.warning("[%s] Grounding metadata error: %s", category, exc)
 
     return text, sources
 
 
-# ─────────────────────────────────────────────
-# PARSE TEXT → LIST OF FINDINGS
-# ─────────────────────────────────────────────
 def _parse_findings(text: str, sources: list[dict]) -> list[dict]:
-    """Convert raw response text + sources into structured findings."""
     if not text.strip():
         return []
 
@@ -171,7 +132,6 @@ def _parse_findings(text: str, sources: list[dict]) -> list[dict]:
             "source_title": source.get("source_title", ""),
         })
 
-    # Ensure at least one entry if text exists
     if not findings and text.strip():
         source = sources[0] if sources else {}
         findings.append({
@@ -182,56 +142,33 @@ def _parse_findings(text: str, sources: list[dict]) -> list[dict]:
     return findings
 
 
-# ─────────────────────────────────────────────
-# MAIN ENTRY POINT
-# ─────────────────────────────────────────────
 def harvest_signals(company_name: str) -> dict[str, Any]:
-    """
-    Tool 1 — Fetch REAL buyer signals using Gemini 2.0 Flash + Google Search Grounding.
 
-    Uses the NEW google-genai SDK (not the deprecated google-generativeai).
-    Falls back to demo data if new SDK is not installed or all queries fail.
-    """
-    print("\n" + "=" * 65)
-    print(f"[SIGNAL HARVESTER] Starting for company: {company_name}")
-    print(f"[SIGNAL HARVESTER] NEW_SDK_AVAILABLE: {NEW_SDK_AVAILABLE}")
-    print(f"[SIGNAL HARVESTER] DEMO_MODE: {is_demo_mode()}")
-    print("=" * 65)
-
-    # ── Demo mode shortcut ──────────────────────────────────────
     if is_demo_mode():
-        print("[SIGNAL HARVESTER] DEMO_MODE=true → returning mock signals")
-        logger.info("DEMO_MODE active — returning mock signals for '%s'", company_name)
         return _build_mock_signals(company_name)
 
-    # ── Check new SDK availability ───────────────────────────────
     if not NEW_SDK_AVAILABLE:
-        print("[SIGNAL HARVESTER] FATAL: google-genai not installed! Using demo fallback.")
-        print("[SIGNAL HARVESTER] Fix: pip install google-genai")
         mock = _build_mock_signals(company_name)
         mock["mode"] = "demo_fallback_no_sdk"
         return mock
 
-    # ── Configure NEW SDK client ─────────────────────────────────
     try:
         api_key = get_gemini_api_key()
-        print(f"[SIGNAL HARVESTER] API key loaded: {api_key[:8]}...{api_key[-4:]}")
         client = genai.Client(api_key=api_key)
-        print("[SIGNAL HARVESTER] google-genai Client initialized OK")
     except Exception as exc:
-        print(f"[SIGNAL HARVESTER] FATAL: Failed to init Gemini client: {exc}")
-        print(traceback.format_exc())
-        logger.error("Failed to configure Gemini client: %s — using demo data", exc)
+        logger.error("Failed to configure Gemini client: %s", exc)
         mock = _build_mock_signals(company_name)
         mock["mode"] = "demo_fallback_config_error"
         return mock
 
-    # ── Run 8 grounded searches ──────────────────────────────────
     signals: dict[str, list] = {cat: [] for cat in SEARCH_QUERIES}
     total_sources = 0
     any_success   = False
 
-    for category, query_template in SEARCH_QUERIES.items():
+    query_list = list(SEARCH_QUERIES.items())
+    for idx, (category, query_template) in enumerate(query_list):
+        if on_category_progress:
+            on_category_progress(category, idx + 1, len(query_list))
         query = query_template.format(company=company_name)
         try:
             text, sources = _grounded_search_new_sdk(client, query, category)
@@ -240,25 +177,21 @@ def harvest_signals(company_name: str) -> dict[str, Any]:
             total_sources += len(sources)
             if findings:
                 any_success = True
-                print(f"[SIGNAL HARVESTER] ✓ [{category}] {len(findings)} findings, {len(sources)} sources")
-                logger.info("✓ [%s] %d findings, %d sources", category, len(findings), len(sources))
+                logger.info("[%s] %d findings, %d sources", category, len(findings), len(sources))
             else:
-                print(f"[SIGNAL HARVESTER] ✗ [{category}] 0 findings (text_len={len(text)}, sources={len(sources)})")
-                logger.warning("✗ [%s] 0 findings returned", category)
+                logger.warning("[%s] 0 findings returned", category)
         except Exception as exc:
-            print(f"[SIGNAL HARVESTER] ERROR [{category}]: {exc}")
-            print(traceback.format_exc())
             logger.error("[%s] Exception: %s", category, exc)
             signals[category] = []
 
-    print(f"\n[SIGNAL HARVESTER] Done. any_success={any_success}, total_sources={total_sources}")
+        if idx < len(query_list) - 1:
+            time.sleep(2)
 
-    # ── If every query failed → fall back to demo ────────────────
     if not any_success:
-        print("[SIGNAL HARVESTER] WARNING: All queries failed → using demo_fallback data")
         logger.warning("All grounded searches failed — falling back to demo data")
         mock = _build_mock_signals(company_name)
         mock["mode"] = "demo_fallback"
+        mock["error"] = "All grounded search queries failed. This usually means your Gemini API key has exceeded its free tier quota. Check https://ai.google.dev/gemini-api/docs/rate-limits"
         return mock
 
     return {

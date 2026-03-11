@@ -1,15 +1,3 @@
-"""
-tools/outreach_sender.py — Tool 3: AI Email Writer + Automated Sender.
-
-Part A: Uses Gemini 2.0 Flash to write a hyper-personalized cold email
-        referencing SPECIFIC signals from the account brief.
-
-Part B: Sends the email via:
-  1. Resend API (if RESEND_API_KEY is set)
-  2. Gmail SMTP (if SMTP_USER + SMTP_PASS are set)
-  3. Preview-only mode (returns email content without sending)
-"""
-
 import json
 import logging
 import re
@@ -29,10 +17,6 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
-
-# ─────────────────────────────────────────────
-# EMAIL GENERATION PROMPT
-# ─────────────────────────────────────────────
 EMAIL_PROMPT = """
 You are an expert B2B copywriter for Rabbitt AI. Write a cold outreach email.
 
@@ -67,11 +51,7 @@ Respond ONLY with valid JSON — no markdown fences, no extra text:
 """
 
 
-# ─────────────────────────────────────────────
-# HELPERS
-# ─────────────────────────────────────────────
 def _extract_json(raw: str) -> dict:
-    """Strip markdown fences and parse the first JSON object found."""
     raw = re.sub(r"```(?:json)?", "", raw).strip().rstrip("`").strip()
     start = raw.find("{")
     end = raw.rfind("}") + 1
@@ -81,7 +61,6 @@ def _extract_json(raw: str) -> dict:
 
 
 def _signals_to_bullets(signals: dict) -> str:
-    """Flatten signals dict to a readable bullet list."""
     result = []
     for cat, findings in signals.get("signals", {}).items():
         for f in findings[:2]:
@@ -89,9 +68,6 @@ def _signals_to_bullets(signals: dict) -> str:
     return "\n".join(result) if result else "No specific signals available."
 
 
-# ─────────────────────────────────────────────
-# PART A — GENERATE EMAIL
-# ─────────────────────────────────────────────
 def _generate_email(
     recipient_email: str,
     company_name: str,
@@ -100,11 +76,10 @@ def _generate_email(
     icp: str,
     signals: dict,
 ) -> dict:
-    """Generate a personalized cold email using Gemini."""
     try:
         api_key = get_gemini_api_key()
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name="gemini-2.0-flash")
+        model = genai.GenerativeModel(model_name="gemini-2.5-flash")
     except Exception as exc:
         logger.error("Gemini config failed for email generation: %s", exc)
         return _fallback_email(company_name, recipient_email)
@@ -135,7 +110,6 @@ def _generate_email(
 
 
 def _fallback_email(company_name: str, recipient_email: str) -> dict:
-    """Minimal email when Gemini is unavailable."""
     return {
         "subject": f"Quick thought on {company_name}'s growth trajectory",
         "body": (
@@ -150,13 +124,9 @@ def _fallback_email(company_name: str, recipient_email: str) -> dict:
     }
 
 
-# ─────────────────────────────────────────────
-# PART B — SEND EMAIL
-# ─────────────────────────────────────────────
 def _send_via_resend(
     sender: str, recipient: str, subject: str, body: str
 ) -> dict:
-    """Attempt to send via Resend API."""
     try:
         import resend  # type: ignore
 
@@ -181,13 +151,12 @@ def _send_via_resend(
 def _send_via_smtp(
     sender: str, recipient: str, subject: str, body: str
 ) -> dict:
-    """Send via Gmail SMTP using app password."""
     smtp_user = get_smtp_user()
     smtp_pass = get_smtp_pass()
     try:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
-        msg["From"]    = sender       # must equal smtp_user for Gmail
+        msg["From"]    = sender
         msg["To"]      = recipient
         msg.attach(MIMEText(body, "plain"))
 
@@ -209,7 +178,6 @@ def _send_via_smtp(
 
 
 def _preview_only(subject: str, body: str) -> dict:
-    """Return preview without actually sending."""
     return {
         "method": "preview_only",
         "success": True,
@@ -220,9 +188,6 @@ def _preview_only(subject: str, body: str) -> dict:
     }
 
 
-# ─────────────────────────────────────────────
-# MAIN ENTRY POINT
-# ─────────────────────────────────────────────
 def send_outreach(
     recipient_email: str,
     company_name: str,
@@ -230,19 +195,6 @@ def send_outreach(
     signals: dict | None = None,
     brief: dict | None = None,
 ) -> dict[str, Any]:
-    """
-    Tool 3 — Generate and (optionally) send a hyper-personalized cold email.
-
-    Args:
-        recipient_email:  The destination email address.
-        company_name:     Target company name.
-        icp:              User's Ideal Customer Profile string.
-        signals:          Dict from Tool 1 (injected from agent state).
-        brief:            Dict from Tool 2 (injected from agent state).
-
-    Returns full result dict including generated email + send status.
-    """
-    # ── Extract brief fields ─────────────────────────────────────
     account_brief = ""
     key_signals_identified: list = []
     recommended_angle = ""
@@ -252,7 +204,6 @@ def send_outreach(
         key_signals_identified = brief.get("key_signals_identified", [])
         recommended_angle = brief.get("recommended_angle", "")
 
-    # ── Part A: Generate email ───────────────────────────────────
     logger.info("Generating email for %s → %s", company_name, recipient_email)
     email_content = _generate_email(
         recipient_email=recipient_email,
@@ -266,7 +217,7 @@ def send_outreach(
     subject = email_content.get("subject", "")
     body = email_content.get("body", "")
 
-    # ── Part B: Send email ───────────────────────────────────────
+
     resend_key = get_resend_api_key()
     smtp_user  = get_smtp_user()
 
@@ -276,7 +227,6 @@ def send_outreach(
         logger.info("Sending via Resend API from %s", sender_email)
         send_status = _send_via_resend(sender_email, recipient_email, subject, body)
     elif smtp_user:
-        # Gmail SMTP: the From address MUST be the authenticated Gmail account
         logger.info("Sending via Gmail SMTP from %s → %s", smtp_user, recipient_email)
         send_status = _send_via_smtp(smtp_user, recipient_email, subject, body)
     else:

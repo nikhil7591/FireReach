@@ -1,13 +1,3 @@
-"""
-agent.py — FireReach Autonomous Agent Orchestrator.
-
-Uses Gemini Function Calling to decide which tool to invoke and in what order.
-- System prompt instructs the LLM to call all 3 tools sequentially.
-- A shared "state" dict passes signals and brief between tools (preventing
-  context-window data loss).
-- Falls back to direct sequential execution if Function Calling fails.
-"""
-
 import json
 import logging
 from typing import Any
@@ -22,10 +12,6 @@ from tools.outreach_sender import send_outreach
 
 logger = logging.getLogger(__name__)
 
-
-# ─────────────────────────────────────────────
-# SYSTEM PROMPT
-# ─────────────────────────────────────────────
 SYSTEM_PROMPT = """
 You are FireReach, an autonomous outreach agent built by Rabbitt AI.
 
@@ -43,11 +29,7 @@ CONSTRAINTS:
 """
 
 
-# ─────────────────────────────────────────────
-# FUNCTION DECLARATIONS (for Gemini)
-# ─────────────────────────────────────────────
 def _build_function_declarations() -> list[protos.FunctionDeclaration]:
-    """Return the 3 FunctionDeclarations that Gemini can call."""
     return [
         protos.FunctionDeclaration(
             name="tool_signal_harvester",
@@ -116,26 +98,13 @@ def _build_function_declarations() -> list[protos.FunctionDeclaration]:
     ]
 
 
-# ─────────────────────────────────────────────
-# TOOL ROUTER
-# ─────────────────────────────────────────────
-def _execute_tool(
-    tool_name: str,
-    args: dict,
-    state: dict,
-    icp: str,
-) -> dict:
-    """
-    Dispatch a tool call and update shared state.
-    'state' persists signals and brief across tool calls.
-    """
+def _execute_tool(tool_name: str, args: dict, state: dict, icp: str) -> dict:
     if tool_name == "tool_signal_harvester":
         result = harvest_signals(company_name=args.get("company_name", ""))
         state["signals"] = result
         return result
 
     if tool_name == "tool_research_analyst":
-        # Inject real signals from state (not from LLM context)
         result = analyze_signals(
             company_name=args.get("company_name", ""),
             icp=args.get("icp", icp),
@@ -145,7 +114,6 @@ def _execute_tool(
         return result
 
     if tool_name == "tool_outreach_automated_sender":
-        # Inject both signals and brief from state
         result = send_outreach(
             recipient_email=args.get("recipient_email", ""),
             company_name=args.get("company_name", ""),
@@ -158,19 +126,11 @@ def _execute_tool(
     return {"error": f"Unknown tool: {tool_name}"}
 
 
-# ─────────────────────────────────────────────
-# DIRECT SEQUENTIAL FALLBACK
-# ─────────────────────────────────────────────
 def _run_sequentially(icp: str, company: str, recipient_email: str) -> dict:
-    """
-    Fallback: execute all 3 tools in order without Gemini Function Calling.
-    Used when the Gemini chat API is unavailable or throws an exception.
-    """
     logger.warning("Function Calling unavailable — running direct sequential fallback")
     steps = []
     state: dict = {}
 
-    # Step 1
     try:
         res1 = harvest_signals(company_name=company)
         state["signals"] = res1
@@ -184,7 +144,6 @@ def _run_sequentially(icp: str, company: str, recipient_email: str) -> dict:
              "result": {"error": str(e)}, "status": "error"}
         )
 
-    # Step 2
     try:
         res2 = analyze_signals(
             company_name=company, icp=icp, signals=state.get("signals")
@@ -202,7 +161,6 @@ def _run_sequentially(icp: str, company: str, recipient_email: str) -> dict:
              "result": {"error": str(e)}, "status": "error"}
         )
 
-    # Step 3
     try:
         res3 = send_outreach(
             recipient_email=recipient_email,
@@ -236,21 +194,7 @@ def _run_sequentially(icp: str, company: str, recipient_email: str) -> dict:
     }
 
 
-# ─────────────────────────────────────────────
-# MAIN AGENT LOOP
-# ─────────────────────────────────────────────
 def run_agent(icp: str, company: str, recipient_email: str) -> dict[str, Any]:
-    """
-    Main entry point: Run the FireReach agent for a given outreach request.
-
-    1. Starts a Gemini chat session with the system prompt + function declarations.
-    2. Loops up to 10 turns dispatching function calls and feeding results back.
-    3. Falls back to direct sequential execution on any exception.
-
-    Returns:
-        {status, mode, steps, summary, total_steps}
-    """
-    # ── Configure Gemini ─────────────────────────────────────────
     try:
         api_key = get_gemini_api_key()
         genai.configure(api_key=api_key)
@@ -261,10 +205,9 @@ def run_agent(icp: str, company: str, recipient_email: str) -> dict[str, Any]:
     func_declarations = _build_function_declarations()
     tool_config = genai.types.Tool(function_declarations=func_declarations)
 
-    # ── Create model + chat ──────────────────────────────────────
     try:
         model = genai.GenerativeModel(
-            model_name="gemini-2.0-flash",
+            model_name="gemini-2.5-flash",
             system_instruction=SYSTEM_PROMPT,
             tools=[tool_config],
         )
@@ -280,11 +223,10 @@ def run_agent(icp: str, company: str, recipient_email: str) -> dict[str, Any]:
     )
 
     steps: list[dict] = []
-    state: dict = {}  # Shared state across tool calls
+    state: dict = {}
     step_counter = 0
     summary_text = ""
 
-    # ── Agent loop (max 10 turns) ────────────────────────────────
     try:
         response = chat.send_message(user_message)
 
@@ -297,17 +239,14 @@ def run_agent(icp: str, company: str, recipient_email: str) -> dict[str, Any]:
                     break
 
             if function_call is None:
-                # No more tool calls — extract final summary text
                 try:
                     summary_text = response.text
                 except Exception:
                     summary_text = "FireReach completed the outreach sequence successfully."
-                break  # Agent finished
+                break
 
-            # ── Execute the tool ─────────────────────────────────
             tool_name = function_call.name
             try:
-                # Convert Struct proto args to plain dict
                 raw_args = dict(function_call.args)
                 args = {k: str(v) for k, v in raw_args.items()}
             except Exception:
@@ -334,8 +273,6 @@ def run_agent(icp: str, company: str, recipient_email: str) -> dict[str, Any]:
                 }
             )
 
-            # ── Send function response back to Gemini ─────────────
-            # Serialize result to a JSON-safe string representation
             safe_result = json.loads(json.dumps(result, default=str))
 
             response = chat.send_message(
@@ -355,7 +292,6 @@ def run_agent(icp: str, company: str, recipient_email: str) -> dict[str, Any]:
         logger.error("Agent loop crashed: %s — using sequential fallback", exc)
         return _run_sequentially(icp, company, recipient_email)
 
-    # ── Build final response ─────────────────────────────────────
     if not summary_text:
         summary_text = (
             f"FireReach successfully completed the autonomous outreach sequence for {company}. "
