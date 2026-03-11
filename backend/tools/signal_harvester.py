@@ -230,11 +230,13 @@ def harvest_signals(company_name: str) -> dict[str, Any]:
         api_key = get_gemini_api_key()
         genai.configure(api_key=api_key)
 
-        # Create model with google_search_retrieval grounding tool
+        # Gemini 2.0 Flash uses the 'google_search' tool (not the old google_search_retrieval)
+        from google.generativeai import protos
         model = genai.GenerativeModel(
             model_name="gemini-2.0-flash",
-            tools="google_search_retrieval",
+            tools=[{"google_search": {}}],
         )
+        logger.info("Gemini model configured with google_search grounding.")
     except Exception as exc:
         logger.error("Failed to configure Gemini: %s — using demo data", exc)
         return _build_mock_signals(company_name)
@@ -255,6 +257,9 @@ def harvest_signals(company_name: str) -> dict[str, Any]:
             total_sources += len(sources)
             if findings:
                 any_success = True
+                logger.info("  ✓ [%s] got %d findings, %d sources", category, len(findings), len(sources))
+            else:
+                logger.warning("  ✗ [%s] returned no findings (text len=%d)", category, len(text))
         except Exception as exc:
             logger.warning("Category '%s' failed: %s — skipping", category, exc)
             signals[category] = []

@@ -310,7 +310,7 @@ export default function App() {
                             <h1 className="text-xl font-black text-white tracking-tight">
                                 Fire<span className="text-fire">Reach</span>
                             </h1>
-                            <p className="text-xs text-gray-500">Autonomous Outreach Engine · Rabbitt AI</p>
+                            <p className="text-xs text-gray-500">Autonomous Outreach Engine</p>
                         </div>
                     </div>
                     <div className="flex items-center gap-3">
