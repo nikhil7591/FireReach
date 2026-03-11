@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 from agent import run_agent
 from tools.signal_harvester import harvest_signals
 from tools.research_analyst import analyze_signals
-from tools.outreach_sender import send_outreach
+from tools.outreach_sender import send_outreach, generate_outreach_email, deliver_email
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -132,8 +132,9 @@ async def run_outreach_stream(request: OutreachRequest):
         yield _sse_event({"type": "step_start", "step": 3, "total_steps": 3, "tool": "tool_outreach_automated_sender", "message": "Crafting personalized email\u2026"})
 
         try:
+            # Generate email content only (fast — just a Groq call)
             email_result = await asyncio.to_thread(
-                send_outreach,
+                generate_outreach_email,
                 recipient_email=request.recipient_email,
                 company_name=request.company,
                 icp=request.icp,
@@ -142,6 +143,14 @@ async def run_outreach_stream(request: OutreachRequest):
             )
             steps.append({"step": 3, "tool": "tool_outreach_automated_sender", "args": {"recipient_email": request.recipient_email, "company_name": request.company, "icp": request.icp}, "result": email_result, "status": "completed"})
             yield _sse_event({"type": "step_done", "step": 3, "tool": "tool_outreach_automated_sender", "result": email_result})
+
+            # Fire-and-forget: send the email via SMTP/Resend in background
+            subject = email_result.get("email", {}).get("subject", "")
+            body = email_result.get("email", {}).get("body", "")
+            if subject and body:
+                asyncio.ensure_future(asyncio.to_thread(
+                    deliver_email, request.recipient_email, subject, body
+                ))
         except Exception as exc:
             logger.error("Outreach sender failed: %s", exc)
             steps.append({"step": 3, "tool": "tool_outreach_automated_sender", "args": {"recipient_email": request.recipient_email, "company_name": request.company, "icp": request.icp}, "result": {"error": str(exc)}, "status": "error"})

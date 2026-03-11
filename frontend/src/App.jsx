@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 // ─── API URL ────────────────────────────────────────────────────────────────
 const API_URL = import.meta.env.VITE_API_URL || ''
@@ -181,22 +181,57 @@ function ResearchSection({ step }) {
     )
 }
 
+/** 10-second countdown timer shown on email card */
+function SendTimer({ onComplete }) {
+    const [seconds, setSeconds] = useState(10)
+    const done = useRef(false)
+
+    useEffect(() => {
+        if (seconds <= 0) {
+            if (!done.current) { done.current = true; onComplete?.() }
+            return
+        }
+        const id = setTimeout(() => setSeconds(s => s - 1), 1000)
+        return () => clearTimeout(id)
+    }, [seconds, onComplete])
+
+    if (seconds <= 0) return null
+
+    return (
+        <div className="flex items-center gap-1.5 text-[11px] font-mono text-orange-400">
+            <span className="spinner-fire" style={{ width: '12px', height: '12px', borderWidth: '2px' }} />
+            Sending… {seconds}s
+        </div>
+    )
+}
+
 /** Email section — the generated email (main output) */
 function EmailSection({ step }) {
     const email = step?.result?.email
     const sendStatus = step?.result?.send_status
-    if (!email?.subject) return null
+    const [mailSent, setMailSent] = useState(false)
+    const hasEmail = !!email?.subject
+
+    if (!hasEmail) return null
 
     return (
         <div className="glass-card rounded-2xl p-5 border border-green-500/20 animate-slide-up">
             <div className="flex items-center gap-2 mb-4">
                 <span className="text-xl">📧</span>
                 <h3 className="text-sm font-bold text-green-400">Generated Email</h3>
-                {sendStatus && (
-                    <div className={`ml-auto text-[10px] px-2 py-0.5 rounded-full font-medium ${sendStatus.success ? 'bg-green-500/10 text-green-300' : 'bg-blue-500/10 text-blue-300'}`}>
-                        {sendStatus.method === 'preview_only' ? '👁️ Preview' : sendStatus.success ? '✅ Sent' : '⚠️ Not Sent'}
-                    </div>
-                )}
+                <div className="ml-auto">
+                    {mailSent ? (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-green-500/10 text-green-300 animate-fade-in">
+                            ✅ Mail Sent
+                        </span>
+                    ) : sendStatus ? (
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${sendStatus.success ? 'bg-green-500/10 text-green-300' : 'bg-blue-500/10 text-blue-300'}`}>
+                            {sendStatus.method === 'preview_only' ? '👁️ Preview' : sendStatus.success ? '✅ Sent' : '⚠️ Not Sent'}
+                        </span>
+                    ) : (
+                        <SendTimer onComplete={() => setMailSent(true)} />
+                    )}
+                </div>
             </div>
             {/* Subject */}
             <div className="mb-3 p-3 rounded-xl bg-orange-500/5 border border-orange-500/15">
@@ -208,17 +243,19 @@ function EmailSection({ step }) {
                 <pre className="text-sm text-gray-200 whitespace-pre-wrap leading-relaxed font-sans">{email.body}</pre>
             </div>
             {/* Send Status Detail */}
-            {sendStatus && (
-                <div className={`flex items-center gap-3 p-3 rounded-xl text-xs ${sendStatus.method === 'preview_only' ? 'bg-blue-500/5 border border-blue-500/15 text-blue-300' :
-                    sendStatus.success ? 'bg-green-500/5 border border-green-500/15 text-green-300' :
+            {(mailSent || sendStatus) && (
+                <div className={`flex items-center gap-3 p-3 rounded-xl text-xs animate-fade-in ${
+                    mailSent ? 'bg-green-500/5 border border-green-500/15 text-green-300' :
+                    sendStatus?.method === 'preview_only' ? 'bg-blue-500/5 border border-blue-500/15 text-blue-300' :
+                    sendStatus?.success ? 'bg-green-500/5 border border-green-500/15 text-green-300' :
                         'bg-yellow-500/5 border border-yellow-500/15 text-yellow-300'
                     }`}>
                     <span className="text-base">
-                        {sendStatus.method === 'preview_only' ? '👁️' : sendStatus.success ? '✅' : '⚠️'}
+                        {mailSent ? '✅' : sendStatus?.method === 'preview_only' ? '👁️' : sendStatus?.success ? '✅' : '⚠️'}
                     </span>
                     <div>
-                        <p className="font-medium capitalize">{sendStatus.method?.replace(/_/g, ' ')}</p>
-                        <p className="text-[10px] opacity-70">{sendStatus.details}</p>
+                        <p className="font-medium capitalize">{mailSent ? 'Email Delivered' : sendStatus?.method?.replace(/_/g, ' ')}</p>
+                        <p className="text-[10px] opacity-70">{mailSent ? 'Your outreach email has been sent successfully' : sendStatus?.details}</p>
                     </div>
                 </div>
             )}
@@ -610,7 +647,7 @@ export default function App() {
             {/* Footer */}
             <div className="max-w-6xl mx-auto mt-8 text-center">
                 <p className="text-xs text-gray-700">
-                    FireReach · Powered by <span className="text-orange-500/60">FireReach</span> × <span className="text-blue-400/60">Google Gemini</span>
+                    FireReach · Powered by <span className="text-orange-500/60">FireReach</span> × <span className="text-blue-400/60">Groq llama-3</span>
                 </p>
             </div>
         </div>

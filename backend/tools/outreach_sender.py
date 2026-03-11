@@ -192,13 +192,14 @@ def _preview_only(subject: str, body: str) -> dict:
     }
 
 
-def send_outreach(
+def generate_outreach_email(
     recipient_email: str,
     company_name: str,
     icp: str,
     signals: dict | None = None,
     brief: dict | None = None,
 ) -> dict[str, Any]:
+    """Generate the email content only (no sending). Returns fast."""
     account_brief = ""
     key_signals_identified: list = []
     recommended_angle = ""
@@ -218,34 +219,52 @@ def send_outreach(
         signals=signals or {},
     )
 
-    subject = email_content.get("subject", "")
-    body = email_content.get("body", "")
-
-
-    resend_key = get_resend_api_key()
-    smtp_user  = get_smtp_user()
-
-    send_status: dict
-    if resend_key:
-        sender_email = get_sender_email()
-        logger.info("Sending via Resend API from %s", sender_email)
-        send_status = _send_via_resend(sender_email, recipient_email, subject, body)
-    elif smtp_user:
-        logger.info("Sending via Gmail SMTP from %s → %s", smtp_user, recipient_email)
-        send_status = _send_via_smtp(smtp_user, recipient_email, subject, body)
-    else:
-        logger.info("No send credentials — preview mode")
-        send_status = _preview_only(subject, body)
-
     return {
         "company": company_name,
         "recipient_email": recipient_email,
         "email": {
-            "subject": subject,
-            "body": body,
+            "subject": email_content.get("subject", ""),
+            "body": email_content.get("body", ""),
         },
-        "send_status": send_status,
         "account_brief_used": account_brief,
         "recommended_angle": recommended_angle,
         "status": "success",
     }
+
+
+def deliver_email(recipient_email: str, subject: str, body: str) -> dict:
+    """Send an already-generated email via SMTP/Resend. Can be run in background."""
+    resend_key = get_resend_api_key()
+    smtp_user = get_smtp_user()
+
+    if resend_key:
+        sender_email = get_sender_email()
+        logger.info("Sending via Resend API from %s", sender_email)
+        return _send_via_resend(sender_email, recipient_email, subject, body)
+    elif smtp_user:
+        logger.info("Sending via Gmail SMTP from %s → %s", smtp_user, recipient_email)
+        return _send_via_smtp(smtp_user, recipient_email, subject, body)
+    else:
+        logger.info("No send credentials — preview mode")
+        return _preview_only(subject, body)
+
+
+def send_outreach(
+    recipient_email: str,
+    company_name: str,
+    icp: str,
+    signals: dict | None = None,
+    brief: dict | None = None,
+) -> dict[str, Any]:
+    """Legacy wrapper — generates AND sends (used by non-streaming endpoint)."""
+    result = generate_outreach_email(
+        recipient_email=recipient_email,
+        company_name=company_name,
+        icp=icp,
+        signals=signals,
+        brief=brief,
+    )
+    subject = result["email"]["subject"]
+    body = result["email"]["body"]
+    result["send_status"] = deliver_email(recipient_email, subject, body)
+    return result

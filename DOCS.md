@@ -7,8 +7,9 @@ User Input (ICP + Company + Email)
          │
          ▼
 ┌──────────────────────────────────────────┐
-│   FIREREACH AGENT (Gemini 2.5 Flash)     │
-│   Function Calling Orchestrator          │
+│   FIREREACH PIPELINE (Groq AI)           │
+│   Sequential 3-Tool Orchestrator         │
+│   + SSE Real-Time Streaming              │
 └──────────────────────────────────────────┘
          │                │               │
          ▼                ▼               ▼
@@ -19,10 +20,9 @@ User Input (ICP + Company + Email)
   └─────────────┘  └────────────┘  └───────────────┘
          │                │               │
          ▼                ▼               ▼
-  8 Grounded        Account Brief    Cold Email
-  Search Queries    + Pain Points    Generated +
-  (Google Search)   + Angle          Sent/Preview
-  → Real Sources
+  8 AI-Powered      Account Brief    Cold Email
+  Signal Queries    + Pain Points    Generated +
+  (Groq LLM)       + Angle          Sent/Preview
 
          └────────────────────────────────┘
                 Shared State (dict)
@@ -32,26 +32,27 @@ User Input (ICP + Company + Email)
 
 ---
 
-## How Grounding Works
+## How Signal Harvesting Works
 
-The Signal Harvester uses **Gemini Google Search Grounding** via the `google-genai` SDK:
+The Signal Harvester uses **Groq AI** (Llama 3.3 70B) to generate buyer intelligence:
 
-1. For each of the 8 signal categories, Gemini performs a live Google Search
-2. `response.candidates[0].grounding_metadata.grounding_chunks` contains real URLs and titles
-3. These URL-cited findings flow to the Research Analyst and Email Writer
-4. The Email Writer references **specific signals** (amounts, dates, names) — making every email unique and fact-anchored
+1. For each of the 8 signal categories, a targeted prompt is sent to Groq
+2. Groq returns structured findings with specific details (amounts, dates, names)
+3. These findings flow to the Research Analyst and Email Writer via shared state
+4. The Email Writer references **specific signals** — making every email unique and fact-anchored
+5. Real-time progress is streamed to the frontend via SSE (Server-Sent Events)
 
 ---
 
 ## Tech Stack
 
 | Component        | Technology                                 |
-|------------------|--------------------------------------------|
+|------------------|-------------------------------------------|
 | Backend          | FastAPI (Python 3.12+)                     |
 | Frontend         | React 18 + Vite + Tailwind CSS             |
-| LLM              | Google Gemini 2.5 Flash                    |
-| Grounded Search  | `google-genai` SDK + Google Search         |
-| Function Calling | `google-generativeai` SDK + protos API     |
+| LLM              | Groq AI — Llama 3.3 70B Versatile          |
+| SDK              | `groq` Python SDK                          |
+| Streaming        | Server-Sent Events (SSE)                   |
 | Email (primary)  | Resend API                                 |
 | Email (fallback) | Gmail SMTP                                 |
 | Email (last)     | Preview-only (no credentials needed)       |
@@ -63,11 +64,13 @@ The Signal Harvester uses **Gemini Google Search Grounding** via the `google-gen
 
 ### Tool 1: `tool_signal_harvester`
 
-Fetches real buyer signals via Google Search Grounding across 8 categories: funding, hiring, leadership, news, tech_stack, g2_reviews, social_mentions, competitor_churn.
+Fetches buyer signals via Groq AI across 8 categories: funding, hiring, leadership, news, tech_stack, g2_reviews, social_mentions, competitor_churn.
 
 **Input**: `{ "company_name": "string" }`
 
 **Output**: `{ company, timestamp, signals: { [category]: [{ finding, source_url, source_title }] }, sources_count, mode }`
+
+**Progress callback**: `on_category_progress(category, current, total)` — used by the SSE streaming endpoint to send real-time progress events.
 
 ### Tool 2: `tool_research_analyst`
 
@@ -87,25 +90,27 @@ Writes a hyper-personalized cold email referencing specific signals and sends it
 
 ---
 
-## SDKs
+## SSE Streaming
 
-FireReach uses two Google SDKs:
+The `/api/outreach/stream` endpoint uses Server-Sent Events to provide real-time progress:
 
-| SDK | Package | Used By | Purpose |
-|-----|---------|---------|---------|
-| New | `google-genai` | `signal_harvester.py` | Google Search Grounding |
-| Old | `google-generativeai` | `agent.py`, `research_analyst.py`, `outreach_sender.py` | Standard generation + Function Calling |
+| Event Type         | Description                              |
+|--------------------|------------------------------------------|
+| `step_start`       | A tool is starting execution             |
+| `signal_category`  | Signal harvester progress (e.g. 3/8)     |
+| `step_done`        | A tool completed with its result         |
+| `step_error`       | A tool encountered an error              |
+| `complete`         | Full pipeline result with all steps      |
 
-Both are listed in `requirements.txt`.
+The frontend tries `/api/outreach/stream` first and falls back to `/api/outreach` if SSE is unavailable.
 
 ---
 
 ## Demo Mode
 
 When `DEMO_MODE=true`, all tools return mock data. The Signal Harvester also falls back to demo data if:
-- `google-genai` package is not installed
-- API key is invalid or missing
-- All 8 grounded search queries fail
+- Groq API key is invalid or missing
+- All 8 signal queries fail
 
 ---
 
@@ -113,7 +118,7 @@ When `DEMO_MODE=true`, all tools return mock data. The Signal Harvester also fal
 
 ### Backend → Render
 
-**Blueprint**: Push to GitHub → Render → New → Blueprint → connect repo → add `GEMINI_API_KEY` in dashboard → Apply.
+**Blueprint**: Push to GitHub → Render → New → Blueprint → connect repo → add `GROQ_API_KEY` in dashboard → Apply.
 
 **Manual**: New → Web Service → Build: `cd backend && pip install -r requirements.txt` → Start: `cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT` → add env vars.
 
@@ -127,5 +132,5 @@ Import repo → Framework: Vite → Root: `frontend` → add `VITE_API_URL` = Re
 const API_URL = import.meta.env.VITE_API_URL || ''
 ```
 
-- **Local**: Empty → requests go to `/api/*` → Vite proxy forwards to `localhost:8001`
+- **Local**: Empty → requests go to `/api/*` → Vite proxy forwards to `localhost:8000`
 - **Production**: Set to Render URL → requests go directly to backend
